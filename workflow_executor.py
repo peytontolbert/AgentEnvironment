@@ -52,6 +52,10 @@ class WorkflowExecutor:
                 next_action = await self.decide_next_action(consciousness_result)
                 await self.execute_action(next_action, consciousness_result)
                 
+                # Retrieve and process recent experiences
+                recent_experiences = await self.knowledge_base.get_recent_experiences()
+                await self.process_recent_experiences(recent_experiences)
+                
                 # Wait for a short period before starting the next cycle
                 await asyncio.sleep(60)  # Wait for 1 minute
         except Exception as e:
@@ -63,12 +67,49 @@ class WorkflowExecutor:
         """
         self.logger.info("Checking for existing long-term memory.")
         longterm_memory = await self.knowledge_base.get_longterm_memory()
+        recent_experiences = await self.knowledge_base.get_recent_experiences()
         if longterm_memory:
             self.logger.info("Existing memory found. Resuming from last known state.")
-            return {"task": "resume_from_memory", "longterm_memory": longterm_memory}
+            return {
+                "task": "resume_from_memory",
+                "longterm_memory": longterm_memory,
+                "recent_experiences": recent_experiences
+            }
         else:
             self.logger.info("No existing memory found. Starting fresh.")
-            return {"task": "initiate_project_creation"}
+            return {
+                "task": "initiate_project_creation",
+                "recent_experiences": recent_experiences
+            }
+
+    async def process_recent_experiences(self, recent_experiences: List[Dict[str, Any]]) -> None:
+        """
+        Process recent experiences to inform decision-making and learning.
+        """
+        self.logger.info("Processing recent experiences.")
+        for experience in recent_experiences:
+            # Analyze the experience and update the knowledge base or decision-making process
+            analysis_result = await self.ollama.query_ollama(
+                "experience_analysis",
+                f"Analyze this experience and suggest improvements: {json.dumps(experience)}",
+                context={"task": "experience_analysis"}
+            )
+            
+            # Apply the suggested improvements
+            if "suggested_improvements" in analysis_result:
+                for improvement in analysis_result["suggested_improvements"]:
+                    await self.apply_improvement(improvement)
+            
+        self.logger.info("Finished processing recent experiences.")
+
+    async def apply_improvement(self, improvement: Dict[str, Any]) -> None:
+        """
+        Apply a suggested improvement based on experience analysis.
+        """
+        self.logger.info(f"Applying improvement: {improvement['description']}")
+        # Implement the logic to apply the improvement
+        # This could involve updating the knowledge base, modifying decision-making algorithms, etc.
+        pass
 
     async def emulate_consciousness(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -233,6 +233,67 @@ class KnowledgeBase:
             self.logger.error(f"Error retrieving long-term memory: {str(e)}")
         return longterm_memory
 
+    async def get_recent_experiences(self) -> List[Dict[str, Any]]:
+        """Retrieve recent experiences from the graph database."""
+        self.logger.info("Retrieving recent experiences from the graph database.")
+        recent_experiences = []
+        try:
+            with self.driver.session() as session:
+                result = session.run(
+                    "MATCH (e:Experience) "
+                    "RETURN e.scenario AS scenario, e.action AS action, e.outcome AS outcome, e.lesson_learned AS lesson_learned "
+                    "ORDER BY e.timestamp DESC LIMIT 10"
+                )
+                for record in result:
+                    experience = {
+                        "scenario": record["scenario"],
+                        "action": record["action"],
+                        "outcome": record["outcome"],
+                        "lesson_learned": record["lesson_learned"]
+                    }
+                    recent_experiences.append(experience)
+            
+            if not recent_experiences:
+                self.logger.info("No recent experiences found. Creating the first experience.")
+                first_experience = {
+                    "scenario": "Initialization of AI Assistant",
+                    "action": "Created first experience entry",
+                    "outcome": "Successfully initialized the knowledge base",
+                    "lesson_learned": "Importance of maintaining a record of experiences for continuous learning"
+                }
+                await self.add_experience(first_experience)
+                recent_experiences.append(first_experience)
+                
+                # Create additional experience about being Nimbus
+                nimbus_experience = {
+                    "scenario": "Introduction of AI Assistant Nimbus",
+                    "action": "Defined core capabilities and purpose",
+                    "outcome": "Established identity as an autonomous software engineering assistant",
+                    "lesson_learned": "Clear definition of purpose and capabilities enhances interaction and task execution"
+                }
+                await self.add_experience(nimbus_experience)
+                recent_experiences.append(nimbus_experience)
+            
+            self.logger.info(f"Retrieved {len(recent_experiences)} recent experiences.")
+        except Exception as e:
+            self.logger.error(f"Error retrieving recent experiences: {str(e)}")
+        return recent_experiences
+
+    async def add_experience(self, experience: Dict[str, Any]):
+        """Add a new experience to the graph database."""
+        try:
+            with self.driver.session() as session:
+                session.run(
+                    "CREATE (e:Experience {scenario: $scenario, action: $action, outcome: $outcome, lesson_learned: $lesson_learned, timestamp: timestamp()})",
+                    scenario=experience["scenario"],
+                    action=experience["action"],
+                    outcome=experience["outcome"],
+                    lesson_learned=experience["lesson_learned"]
+                )
+            self.logger.info(f"Added new experience: {experience['scenario']}")
+        except Exception as e:
+            self.logger.error(f"Error adding new experience: {str(e)}")
+
     async def integrate_cross_disciplinary_knowledge(self, disciplines: List[str], knowledge: Dict[str, Any]) -> Dict[str, Any]:
         """Integrate knowledge across multiple disciplines."""
         prompt = f"Integrate knowledge from these disciplines: {disciplines} with the following data: {json.dumps(knowledge)}"
