@@ -10,6 +10,7 @@ from main_narrative_control import VersionControlSystem, CodeAnalysis, TestingFr
 from self_improvement import SelfImprovement
 from quantum_optimizer import QuantumOptimizer
 from spreadsheet_manager import SpreadsheetManager
+from continuous_learner import ContinuousLearner
 
 class WorkflowExecutor:
     def __init__(self):
@@ -24,6 +25,7 @@ class WorkflowExecutor:
         self.self_improvement = SelfImprovement(self.ollama, self.knowledge_base, None, self.consciousness_emulator)
         self.quantum_optimizer = QuantumOptimizer(self.ollama)
         self.spreadsheet_manager = SpreadsheetManager("workflow_data.xlsx")
+        self.continuous_learner = ContinuousLearner(self.ollama, self.knowledge_base)
         self.logger = logging.getLogger("WorkflowExecutor")
 
     async def execute_workflow(self) -> None:
@@ -31,10 +33,17 @@ class WorkflowExecutor:
         Execute the main workflow of the system.
         """
         try:
-            context = await self.initialize_context()
-            consciousness_result = await self.emulate_consciousness(context)
-            next_action = await self.decide_next_action(consciousness_result)
-            await self.execute_action(next_action, consciousness_result)
+            # Start the continuous learning process in the background
+            asyncio.create_task(self.continuous_learner.start_continuous_learning())
+
+            while True:
+                context = await self.initialize_context()
+                consciousness_result = await self.emulate_consciousness(context)
+                next_action = await self.decide_next_action(consciousness_result)
+                await self.execute_action(next_action, consciousness_result)
+                
+                # Wait for a short period before starting the next cycle
+                await asyncio.sleep(60)  # Wait for 1 minute
         except Exception as e:
             self.logger.error(f"Error in execute_workflow: {e}")
             # Implement error recovery mechanism here
