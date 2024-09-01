@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from typing import Dict, Any
+from ollama_interface import OllamaInterface
+from knowledge_base import KnowledgeBase
 
 class ContinuousLearner:
     def __init__(self, ollama, knowledge_base):
@@ -76,9 +78,8 @@ class ContinuousLearner:
         self.logger.info(f"Optimized decision-making process: {optimization_result}")
 
 if __name__ == "__main__":
-    # This allows the ContinuousLearner to be run as a standalone script
     logging.basicConfig(level=logging.INFO)
-    ollama = OllamaInterface()  # You'll need to import and initialize this properly
-    knowledge_base = KnowledgeBase()  # You'll need to import and initialize this properly
+    ollama = OllamaInterface()
+    knowledge_base = KnowledgeBase()
     learner = ContinuousLearner(ollama, knowledge_base)
     asyncio.run(learner.start_continuous_learning())
