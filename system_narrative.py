@@ -1,25 +1,16 @@
-import os
 import logging
-import aiohttp
-from logging_utils import log_with_ollama
 from knowledge_base import KnowledgeBase
 from ollama_interface import OllamaInterface
-import asyncio
-import time
-import subprocess
-import json
-from reinforcement_learning_module import ReinforcementLearningModule
 from spreadsheet_manager import SpreadsheetManager
 from attention_mechanism import ConsciousnessEmulator
 from swarm_intelligence import SwarmIntelligence
 from self_improvement import SelfImprovement
 from quantum_decision_maker import QuantumDecisionMaker
 from visualization.dimensional_code_visualizer import DimensionalCodeVisualizer
-
-import os
+from omniscient_data_absorber import OmniscientDataAbsorber
 
 class SystemNarrative:
-    def __init__(self, ollama_interface: OllamaInterface, knowledge_base: KnowledgeBase, data_absorber: 'OmniscientDataAbsorber', si: SelfImprovement):
+    def __init__(self, ollama_interface: OllamaInterface, knowledge_base: KnowledgeBase, data_absorber: OmniscientDataAbsorber, si: SelfImprovement):
         self.si = si
         self.ollama = ollama_interface
         self.knowledge_base = knowledge_base
@@ -28,9 +19,7 @@ class SystemNarrative:
         self.logger = logging.getLogger("SystemNarrative")
         self.spreadsheet_manager = SpreadsheetManager("system_data.xlsx")
         self.consciousness_emulator = ConsciousnessEmulator(ollama_interface)
-        self.omniscient_data_absorber = OmniscientDataAbsorber(knowledge_base, ollama_interface)
         self.swarm_intelligence = SwarmIntelligence(ollama_interface)
-        self.request_log = []
         self.code_visualizer = DimensionalCodeVisualizer(ollama_interface)
 
     async def collect_user_feedback(self, thought_processes):
