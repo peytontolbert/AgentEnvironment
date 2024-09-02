@@ -1,4 +1,10 @@
 import logging
+import json
+import time
+import os
+import asyncio
+import subprocess
+import aiohttp
 from knowledge_base import KnowledgeBase
 from ollama_interface import OllamaInterface
 from spreadsheet_manager import SpreadsheetManager
@@ -8,6 +14,7 @@ from self_improvement import SelfImprovement
 from quantum_decision_maker import QuantumDecisionMaker
 from visualization.dimensional_code_visualizer import DimensionalCodeVisualizer
 from omniscient_data_absorber import OmniscientDataAbsorber
+from logging_utils import log_with_ollama
 
 class SystemNarrative:
     def __init__(self, ollama_interface: OllamaInterface, knowledge_base: KnowledgeBase, data_absorber: OmniscientDataAbsorber, si: SelfImprovement):
