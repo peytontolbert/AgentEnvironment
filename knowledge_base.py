@@ -7,6 +7,7 @@ import asyncio
 import time
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
+import pickle
 
 load_dotenv()
 
@@ -27,19 +28,35 @@ class KnowledgeBase:
             self.logger = logging.getLogger(__name__)
             logging.basicConfig(level=logging.INFO)
             self.initialize_database()
-            self.ollama = ollama_interface
             self.longterm_memory = {}
             self.base_directory = "knowledge_base_data"
             if not os.path.exists(self.base_directory):
                 os.makedirs(self.base_directory)
             self.memory_limit = 100  # Set a default memory limit
             self.initialized = True
+            self.project_state = "idle"  # Initial project state
+            self.current_project = None  # Initial current project
+            self.ollama = ollama_interface  # Reference to OllamaInterface
+
+    async def check_initial_conditions(self):
+        """Check initial conditions before running the knowledge base."""
+        if not os.path.exists(self.base_directory):
+            self.logger.info(f"Directory '{self.base_directory}' does not exist. Creating it.")
+            os.makedirs(self.base_directory)
+
+    async def setup_new_environment(self):
+        """Set up a new environment for the knowledge base."""
+        await self.check_initial_conditions()
+        categorized_entries = await self.list_entries()
+        self.index_and_categorize_entries(categorized_entries)
+        self.logger.info("New environment set up.")
 
     def initialize_database(self):
         """Initialize the database with necessary nodes and relationships."""
         try:
             with self.driver.session() as session:
                 session.write_transaction(self._create_initial_nodes)
+                session.write_transaction(self._create_longterm_memory_label)
             self.logger.info("Database initialized successfully.")
         except Exception as e:
             self.logger.error(f"Failed to initialize database: {str(e)}")
@@ -54,8 +71,11 @@ class KnowledgeBase:
 
     @staticmethod
     def _create_initial_nodes(tx):
-        # Create initial nodes or constraints if needed
         tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Node) REQUIRE n.name IS UNIQUE")
+
+    @staticmethod
+    def _create_longterm_memory_label(tx):
+        tx.run("CREATE (n:LongTermMemory {name: 'initial_memory', data: ''})")
 
     def add_nodes_batch(self, label, nodes):
         """Add multiple nodes in a batch to the graph."""
@@ -113,7 +133,7 @@ class KnowledgeBase:
         with self.driver.session() as session:
             session.write_transaction(self._create_relationship, from_capability, to_capability, relationship_type, properties)
 
-    def query_insights(self, query):
+    async def query_insights(self, query):
         """Execute a custom query to retrieve insights from the graph database."""
         with self.driver.session() as session:
             result = session.run(query)
@@ -126,96 +146,6 @@ class KnowledgeBase:
             "RETURN c.name AS current, r, next.name AS next"
         )
         return self.query_insights(query)
-    async def retrieve_documents(self, query: str, include_longterm_memory: bool = True) -> List[Dict[str, Any]]:
-        """Retrieve relevant documents based on the query using the graph database, optionally including long-term memory insights."""
-        self.logger.info(f"Retrieving documents for query: {query}")
-        try:
-            # Query the graph database for relevant documents
-            documents = self.query_insights(query)
-            if include_longterm_memory:
-                longterm_memory = await self.get_longterm_memory()
-                documents.extend(longterm_memory.get("insights", []))
-            # Enhance document retrieval with contextual awareness
-            context = {"query": query}
-            enhanced_context = await self.ollama.emulate_consciousness(context)
-            prioritized_documents = sorted(documents, key=lambda doc: enhanced_context.get("prioritized_actions", {}).get(doc['title'], 0), reverse=True)
-            self.logger.debug(f"Retrieved and prioritized documents: {prioritized_documents}")
-            return prioritized_documents
-        except Exception as e:
-            self.logger.error(f"Error during document retrieval: {str(e)}")
-            return []
-
-    async def augment_prompt_with_retrieval(self, prompt: str, task: str, historical_context: bool = True) -> str:
-        """Augment the prompt with retrieved documents and historical context."""
-        documents = await self.retrieve_documents(prompt)
-        augmented_prompt = prompt + "\n\n### Retrieved Documents:\n"
-        for doc in documents:
-            augmented_prompt += f"- **{doc['title']}**: {doc['content']}\n"
-        
-        if historical_context:
-            historical_data = await self.get_entry("historical_context")
-            augmented_prompt += "\n\n### Historical Context:\n"
-            for entry in historical_data:
-                augmented_prompt += f"- **{entry['title']}**: {entry['content']}\n"
-
-        # Log the augmented prompt for debugging
-        self.logger.debug(f"Augmented prompt: {augmented_prompt}")
-        self.logger.info(f"Augmented prompt for task '{task}': {augmented_prompt}")
-        return str(augmented_prompt)
-    async def sync_with_spreadsheet(self, spreadsheet_manager: SpreadsheetManager, sheet_name: str = "KnowledgeBase"):
-        """Synchronize data between the spreadsheet and the graph database."""
-        try:
-            # Read data from the spreadsheet
-            data = spreadsheet_manager.read_data("A1:Z100")
-            for row in data:
-                entry_name, entry_data = row[0], row[1:]
-                await self.add_entry(entry_name, {"data": entry_data})
-
-            # Write data from the graph database to the spreadsheet
-            entries = await self.list_entries()
-            spreadsheet_manager.write_data((1, 1), [["Entry Name", "Data"]] + [[entry, json.dumps(self.longterm_memory.get(entry, {}))] for entry in entries], sheet_name=sheet_name)
-            self.logger.info("Synchronized data between spreadsheet and graph database.")
-        except Exception as e:
-            self.logger.error(f"Error synchronizing data: {e}")
-
-        # Evaluate the relevance of the data
-        relevance_decision = await self.evaluate_relevance(entry_name, data)
-        if not relevance_decision.get('is_relevant', False):
-            self.logger.info(f"Entry deemed irrelevant and not added: {entry_name}")
-            return False
-
-        decision = await self.ollama.query_ollama(
-            self.ollama.system_prompt,
-            f"Should I add this entry: {entry_name} with data: {data}",
-            task="knowledge_base"
-        )
-
-        if decision.get('add_entry', False):
-            properties = {
-                "data": data,
-                "metadata": {},
-                "narrative_context": {},
-                "timestamp": time.time()
-            }
-            self.add_node(entry_name, properties)
-            self.logger.info(f"Entry added: {entry_name} with metadata and narrative context")
-            # Log the addition of new capabilities for future analysis
-            await self.log_capability_evolution(entry_name, properties)
-            return True
-
-        self.logger.info(f"Entry addition declined: {entry_name}")
-        return False
-
-    async def evaluate_relevance(self, entry_name, data):
-        """Evaluate the relevance of the data before adding it to long-term memory."""
-        prompt = f"Evaluate the relevance of this entry: {entry_name} with data: {data}"
-        context = {"entry_name": entry_name, "data": data}
-        relevance_decision = await self.ollama.query_ollama(self.ollama.system_prompt, prompt, task="relevance_evaluation", context=context)
-        self.logger.info(f"Relevance evaluation for {entry_name}: {relevance_decision}")
-        if not relevance_decision.get('is_relevant', False):
-            self.logger.info(f"Entry deemed irrelevant and not added: {entry_name}")
-            return False
-        return relevance_decision
 
     async def get_longterm_memory(self) -> Dict[str, Any]:
         """Retrieve long-term memory data from the graph database."""
@@ -230,56 +160,31 @@ class KnowledgeBase:
                     longterm_memory[name] = data
             self.logger.info("Successfully retrieved long-term memory.")
         except Exception as e:
-            self.logger.error(f"Error retrieving long-term memory: {str(e)}")
+            if "UnknownLabelWarning" in str(e):
+                self.logger.warning("LongTermMemory label not found in the database.")
+            else:
+                self.logger.error(f"Error retrieving long-term memory: {str(e)}")
         return longterm_memory
 
-    async def get_recent_experiences(self) -> List[Dict[str, Any]]:
-        """Retrieve recent experiences from the graph database."""
-        self.logger.info("Retrieving recent experiences from the graph database.")
-        recent_experiences = []
-        try:
-            with self.driver.session() as session:
-                result = session.run(
-                    "MATCH (e:Experience) "
-                    "RETURN e.scenario AS scenario, e.action AS action, e.outcome AS outcome, e.lesson_learned AS lesson_learned "
-                    "ORDER BY e.timestamp DESC LIMIT 10"
-                )
-                for record in result:
-                    experience = {
-                        "scenario": record["scenario"],
-                        "action": record["action"],
-                        "outcome": record["outcome"],
-                        "lesson_learned": record["lesson_learned"]
-                    }
-                    recent_experiences.append(experience)
-            
-            if not recent_experiences:
-                self.logger.info("No recent experiences found. Creating the first experience.")
-                first_experience = {
-                    "scenario": "Initialization of AI Assistant",
-                    "action": "Created first experience entry",
-                    "outcome": "Successfully initialized the knowledge base",
-                    "lesson_learned": "Importance of maintaining a record of experiences for continuous learning"
-                }
-                await self.add_experience(first_experience)
-                recent_experiences.append(first_experience)
-                
-                # Create additional experience about being Nimbus
-                nimbus_experience = {
-                    "scenario": "Introduction of AI Assistant Nimbus",
-                    "action": "Defined core capabilities and purpose",
-                    "outcome": "Established identity as an autonomous software engineering assistant",
-                    "lesson_learned": "Clear definition of purpose and capabilities enhances interaction and task execution"
-                }
-                await self.add_experience(nimbus_experience)
-                recent_experiences.append(nimbus_experience)
-            
-            self.logger.info(f"Retrieved {len(recent_experiences)} recent experiences.")
-        except Exception as e:
-            self.logger.error(f"Error retrieving recent experiences: {str(e)}")
-        return recent_experiences
+    async def get_recent_experiences(self, limit=5):
+        """
+        Retrieve recent experiences from the knowledge base.
 
-    async def add_experience(self, experience: Dict[str, Any]):
+        Args:
+            limit (int): Maximum number of experiences to retrieve.
+
+        Returns:
+            List[Dict[str, Any]]: List of recent experiences.
+        """
+        with self.driver.session() as session:
+            result = session.run(
+                "MATCH (e:Experience) RETURN e ORDER BY e.timestamp DESC LIMIT $limit",
+                limit=limit
+            )
+            experiences = [dict(record['e']) for record in result]
+        return experiences
+
+    def add_experience(self, experience: Dict[str, Any]):
         """Add a new experience to the graph database."""
         try:
             with self.driver.session() as session:
@@ -294,14 +199,6 @@ class KnowledgeBase:
         except Exception as e:
             self.logger.error(f"Error adding new experience: {str(e)}")
 
-    async def integrate_cross_disciplinary_knowledge(self, disciplines: List[str], knowledge: Dict[str, Any]) -> Dict[str, Any]:
-        """Integrate knowledge across multiple disciplines."""
-        prompt = f"Integrate knowledge from these disciplines: {disciplines} with the following data: {json.dumps(knowledge)}"
-        context = {"disciplines": disciplines, "knowledge": knowledge}
-        integration_result = await self.ollama.query_ollama("cross_disciplinary_integration", prompt, context=context)
-        self.logger.info(f"Cross-disciplinary integration result: {integration_result}")
-        return integration_result
-
     async def get_entry(self, entry_name, include_metadata=False, context=None):
         if context:
             self.logger.info(f"Retrieving entry with context: {context}")
@@ -310,12 +207,7 @@ class KnowledgeBase:
             if result:
                 data = result.get("data")
                 metadata = result.get("metadata", {})
-                interpretation = await self.ollama.query_ollama(self.ollama.system_prompt, f"Interpret this data: {data}", task="knowledge_base")
-                interpretation_result = interpretation.get('interpretation', data)
-                self.logger.info(f"Entry retrieved: {entry_name} | Interpretation: {interpretation_result}")
-                if include_metadata:
-                    return {"data": interpretation_result, "metadata": metadata}
-                return interpretation_result
+                return {"data": data, "metadata": metadata} if include_metadata else data
             else:
                 return None
 
@@ -333,130 +225,69 @@ class KnowledgeBase:
 
     @staticmethod
     def _create_node(tx, label, properties):
-        # Ensure no null values are passed to the database
         sanitized_properties = {k: v for k, v in properties.items() if v is not None}
         query = f"MERGE (n:{label} {{name: $name}}) SET n += $sanitized_properties"
         tx.run(query, name=sanitized_properties.get("name"), sanitized_properties=sanitized_properties)
 
     async def list_entries(self):
         entries = [f.split('.')[0] for f in os.listdir(self.base_directory) if f.endswith('.json')]
-        categorization = await self.ollama.query_ollama(self.ollama.system_prompt, f"Categorize these entries: {entries}", task="knowledge_base")
-        categorized_entries = categorization.get('categorized_entries', entries)
-        self.logger.info(f"Entries listed: {categorized_entries}")
-        return categorized_entries
+        self.logger.info(f"Entries listed: {entries}")
+        return entries
 
-    async def summarize_memory(self, memory):
-        """Summarize memory entries."""
-        self.logger.info(f"Summarizing memory: {memory}")
-        # Ensure memory is serializable before passing to json.dumps
+    async def sync_with_spreadsheet(self, spreadsheet_manager: SpreadsheetManager, sheet_name: str = "KnowledgeBase"):
+        """Synchronize data between the spreadsheet and the graph database."""
         try:
-            memory_data = json.dumps(memory)
-        except (TypeError, ValueError) as e:
-            self.logger.error(f"Error serializing memory data: {e}")
-            return "Error: Memory data is not serializable"
+            data = spreadsheet_manager.read_data("A1:Z100")
+            for row in data:
+                entry_name, entry_data = row[0], row[1:]
+                await self.add_entry(entry_name, {"data": entry_data})
 
-        # Avoid recursive call to query_ollama that leads back to summarize_memory
-        if "summary" in memory:
-            self.logger.info("Memory already summarized.")
-            return memory["summary"]
-
-        summary_response = await self.ollama.query_ollama("memory_summarization", f"Summarize the following memory data: {memory_data}")
-        summary = summary_response.get("summary", "No summary available")
-        self.logger.info(f"Memory summary: {summary}")
-        return summary
-
-    async def summarize_memory_with_ollama(self, memory):
-        """Use Ollama to summarize memory entries."""
-        prompt = f"Summarize the following memory data: {json.dumps(memory)}"
-        summary_response = await self.ollama.query_ollama("memory_summarization", prompt)
-        summary = summary_response.get("summary", "No summary available")
-        self.logger.info(f"Memory summary: {summary}")
-        return summary
-
-    async def retrieve_and_augment_with_rag(self, query, context=None):
-        """Retrieve relevant information from the graph database and augment it with RAG."""
-        context = context or {}
-        graph_data = self.query_insights(query)
-        augmented_data = await self.ollama.query_ollama(
-            "rag_augmentation",
-            f"Augment the following data with additional insights: {graph_data}",
-            context={"graph_data": graph_data, **context}
-        )
-        self.logger.info(f"RAG augmented data: {augmented_data}")
-        return augmented_data
+            entries = await self.list_entries()
+            spreadsheet_manager.write_data((1, 1), [["Entry Name", "Data"]] + [[entry, json.dumps(self.longterm_memory.get(entry, {}))] for entry in entries], sheet_name=sheet_name)
+            self.logger.info("Synchronized data between spreadsheet and graph database.")
+        except Exception as e:
+            self.logger.error(f"Error synchronizing data: {e}")
 
     def index_and_categorize_entries(self, entries):
         """Index and categorize entries for efficient retrieval."""
-        # Example logic to index and categorize entries
-        categorized_entries = sorted(entries, key=lambda x: x)  # Sort alphabetically for simplicity
+        categorized_entries = sorted(entries, key=lambda x: x)
         self.logger.info(f"Indexed and categorized entries: {categorized_entries}")
         return categorized_entries
 
     def refine_memory_entry(self, data):
         """Refine a memory entry for better relevance and actionability."""
-        # Example refinement logic
         refined_data = {k: v for k, v in data.items() if v}
         self.logger.info(f"Refined memory entry: {refined_data}")
         return refined_data
 
     def prioritize_memory_entries(self):
         """Prioritize memory entries based on relevance and usage frequency."""
-        # Example logic to prioritize entries
         prioritized_entries = sorted(self.longterm_memory.items(), key=lambda item: item[1].get('relevance', 0), reverse=True)
-        self.longterm_memory = dict(prioritized_entries[:self.memory_limit])  # Keep top entries within the limit
+        self.longterm_memory = dict(prioritized_entries[:self.memory_limit])
 
-    async def summarize_less_relevant_data(self):
-        """Summarize or compress less relevant data."""
-        for entry_name, data in self.longterm_memory.items():
-            if data.get('relevance', 0) < 5:  # Example threshold
-                self.longterm_memory[entry_name] = await self.summarize_memory(data)
+    def save_memory_state(self, recent_experiences, file_path='nimbus_memory.pkl'):
+        """Save the entire memory state to a file."""
+        state = {
+            'longterm_memory': self.longterm_memory,
+            'recent_experiences': recent_experiences,
+            # Add any other state you want to persist
+        }
+        with open(file_path, 'wb') as f:
+            pickle.dump(state, f)
+        self.logger.info(f"Memory state saved to {file_path}")
 
-    async def periodic_memory_review(self):
-        """Periodically review and update memory based on new insights."""
-        new_insights = await self.ollama.query_ollama("memory_review", "Review and update long-term memory with new insights.")
-        for entry_name, insights in new_insights.items():
-            if entry_name in self.longterm_memory:
-                self.longterm_memory[entry_name].update(insights)
-        self.logger.info("Periodic memory review completed.")
-        """Provide necessary context from long-term memory for ongoing processes."""
-        context = {"longterm_memory": self.longterm_memory}
-        self.logger.info(f"Providing context from long-term memory: {json.dumps(context, indent=2)}")
-        # Example logic to use context in ongoing processes
-        # This could involve updating system state, enhancing decision-making, etc.
-
-    async def save_longterm_memory(self, longterm_memory):
-        """Save long-term memory to a file."""
-        # Ensure long-term memory is updated with new data
-        # Update long-term memory with a limit
-        self.longterm_memory.update({str(k): v for k, v in longterm_memory.items() if v})
-        if len(self.longterm_memory) > self.memory_limit:
-            # Remove the least relevant entries
-            self.prioritize_memory_entries()
-        for entry_name, data in longterm_memory.items():
-            self.add_node("LongTermMemory", {"name": entry_name, "data": data})
-        file_path = os.path.join(self.base_directory, "longterm_memory.json")
-        with open(file_path, 'w') as file:
-            json.dump(self.longterm_memory, file)
-        self.logger.info("Long-term memory updated and saved to file.")
-        # Continuously update long-term memory with new insights
-        await self.update_memory_with_new_insights()
-
-    async def update_memory_with_new_insights(self):
-        """Update long-term memory with new insights and data."""
-        new_insights = await self.ollama.query_ollama("new_insights", "Gather new insights for long-term memory.")
-        self.longterm_memory.update(new_insights)
-        self.logger.info(f"Updated long-term memory with new insights: {json.dumps(new_insights, indent=2)}")
-        entries = await self.list_entries()
-        analysis = await self.ollama.query_ollama(self.ollama.system_prompt, f"Analyze the current state of the knowledge base with these entries: {entries}", task="knowledge_base")
-        analysis_result = analysis.get('analysis', "No analysis available")
-        self.logger.info(f"Knowledge base analysis: {analysis_result}")
-        return analysis_result
-
-
-    async def add_capability(self, capability_name, data):
-        """Add a capability to the knowledge base."""
-        self.longterm_memory[capability_name] = data
-        self.logger.info(f"Added capability: {capability_name} with data: {data}")
+    def load_memory_state(self, file_path='nimbus_memory.pkl'):
+        """Load the entire memory state from a file."""
+        try:
+            with open(file_path, 'rb') as f:
+                state = pickle.load(f)
+            self.longterm_memory = state['longterm_memory']
+            # Load other state components as needed
+            self.logger.info(f"Memory state loaded from {file_path}")
+            return True
+        except FileNotFoundError:
+            self.logger.info("No existing memory state found. Starting fresh.")
+            return False
 
     async def log_interaction(self, source, action, details, improvement):
         """Log interactions with the knowledge base."""
@@ -471,3 +302,41 @@ class KnowledgeBase:
             return f"Applied improvement: {improvement}"
         self.logger.info(f"No knowledge base update for improvement: {improvement}")
         return f"No knowledge base update for improvement: {improvement}"
+
+    def get_project_state(self):
+        """
+        Get the current project state.
+        """
+        return self.project_state
+
+    def set_project_state(self, state):
+        """
+        Set the current project state.
+        """
+        self.project_state = state
+
+    def set_current_project(self, project: Dict[str, Any]):
+        """
+        Set the current project details.
+        """
+        self.current_project = project
+        self.logger.info(f"Current project set: {project['name']}")
+
+    def get_current_project(self):
+        """
+        Get the current project details.
+        """
+        return self.current_project
+
+    async def learn_from_experience(self, feedback: Dict[str, Any]):
+        """Process experience data and extract learnings."""
+        try:
+            # Log the feedback for future reference
+            await self.add_entry("experience_feedback", feedback)
+            self.logger.info(f"Learned from experience: {feedback}")
+        except Exception as e:
+            self.logger.error(f"Error learning from experience: {e}")
+
+    def close(self):
+        """Close the Neo4j driver connection."""
+        self.driver.close()

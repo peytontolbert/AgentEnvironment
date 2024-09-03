@@ -23,10 +23,10 @@ class ContinuousLearner:
         while True:
             try:
                 await self.learn_and_improve()
-                await asyncio.sleep(3600)  # Wait for an hour before the next learning cycle
+                await asyncio.sleep(1)  # Wait for an hour before the next learning cycle
             except Exception as e:
                 self.logger.error(f"Error in continuous learning: {e}")
-                await asyncio.sleep(300)  # Wait for 5 minutes before retrying if an error occurs
+                await asyncio.sleep(1)  # Wait for 5 minutes before retrying if an error occurs
 
     async def learn_and_improve(self):
         """

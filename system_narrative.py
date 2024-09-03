@@ -8,7 +8,7 @@ import aiohttp
 from knowledge_base import KnowledgeBase
 from ollama_interface import OllamaInterface
 from spreadsheet_manager import SpreadsheetManager
-from attention_mechanism import ConsciousnessEmulator
+from consciousness_emulator import ConsciousnessEmulator
 from swarm_intelligence import SwarmIntelligence
 from self_improvement import SelfImprovement
 from quantum_decision_maker import QuantumDecisionMaker

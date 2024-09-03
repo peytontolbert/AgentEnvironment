@@ -1,0 +1,9 @@
+.aider*
+nimbus_projects/*
+datasets/*
+logs/*
+nimbus_progress_log.json
+persistent_data.json
+action_log.txt
+system_data.xslx
+assistant_experiences.xslx

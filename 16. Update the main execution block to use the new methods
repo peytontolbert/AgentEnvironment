@@ -1,4 +1,0 @@
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    ai_assist_controller = AIAssistController()
-    asyncio.run(ai_assist_controller.run())

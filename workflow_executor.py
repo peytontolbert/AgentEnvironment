@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 import os
 import json
 
-from attention_mechanism import ConsciousnessEmulator
+from consciousness_emulator import ConsciousnessEmulator
 from ollama_interface import OllamaInterface
 from knowledge_base import KnowledgeBase
 from system_narrative import SystemNarrative
